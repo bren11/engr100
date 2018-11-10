@@ -1,4 +1,8 @@
 #include <iostream>
+#include <cstdlib>
+#include <fstream>
+#include <ctime>
+#include <sstream>
 #include "Copter.h"
 
 using namespace std;
@@ -6,6 +10,31 @@ using namespace std;
 /*
  * Init and run calls for custom flight mode (largely based off of the AltHold flight mode)
  */
+const int xSize = 300;
+const int ySize = 400;
+int thresh = 5;
+string map[xSize][ySize];
+int dronePosX = 200;
+int dronePosY = 30;
+int prevL = 0;
+int prevR = 0;
+int prevF = 0;
+bool init = false;
+
+void end() {
+	ofstream myfile;
+	time_t current_time;
+	current_time = time(NULL);
+
+	myfile.open("data" + std::to_string(current_time) + ".txt");
+	for (auto& m : map) {
+		for (auto& j : m) {
+			myfile << j;
+		}
+		myfile << "\n";
+	myfile.close();
+	}
+}
 
 // custom_init - initialise custom controller
 bool Copter::custom_init(bool ignore_checks)
@@ -152,6 +181,7 @@ void Copter::custom_run()
         // land if custom_controller returns false
         if (!custom_controller(target_climb_rate, target_roll, target_pitch, target_yaw_rate)) {
             // switch to land mode
+			end();
             set_mode(LAND, MODE_REASON_MISSION_END);
             break;
         }
@@ -182,6 +212,61 @@ void Copter::custom_run()
     }
 }
 
+void setPoint(int x,int y, string str) {
+	if (x > 0 && x < xSize && y > 0 && y < ySize) {
+		map[x][ySize - y - 1] = str;
+	}
+}
+
+void setRelativePoint(int x, int y, string str) {
+	setPoint(x + dronePosX, y + dronePosY, str);
+}
+
+void deltaDrone(int x, int y) {
+	dronePosX += x;
+	dronePosY += y;
+}
+
+void start(int dist_forward, int dist_left, int dist_right) {
+	for (auto& m : map) {
+		for (auto& j : m) {
+			j = " ";
+		}
+	}
+	for (int i = 0; i < 10; i++) {
+		prevL = dist_left;
+		prevF = dist_forward;
+		prevR = dist_right;
+	}
+	prevF /= 10;
+	prevL /= 10;
+	prevR /= 10;
+}
+
+void run(int dist_forward, int dist_left, int dist_right) {
+	if (abs(dist_forward - prevF) < thresh) {
+		deltaDrone(0, prevF - dist_forward);
+	} 
+
+	if (abs(dist_left - prevL) < thresh || abs(dist_right - prevR) < thresh) {
+		if (abs(dist_left - prevL) < abs(dist_right - prevR)) {
+			deltaDrone(dist_left - prevL, 0);
+		} else {
+			deltaDrone(prevR - dist_right, 0);
+		}
+	}
+
+	setRelativePoint(0, dist_forward, "X");
+	setRelativePoint(-dist_left, 0, "X");
+	setRelativePoint(dist_right, 0, "X");
+	
+	setRelativePoint(0,0, "O");
+
+	prevL = dist_left;
+	prevF = dist_forward;
+	prevR = dist_right;
+}
+
 // custom_controller - computes target climb rate, roll, pitch, and yaw rate for custom flight mode
 // returns true to continue flying, and returns false to land
 bool Copter::custom_controller(float &target_climb_rate, float &target_roll, float &target_pitch, float &target_yaw_rate)
@@ -205,6 +290,12 @@ bool Copter::custom_controller(float &target_climb_rate, float &target_roll, flo
 
     // set desired yaw rate in centi-degrees per second (set to zero to hold constant heading)
     target_yaw_rate = 0.0f;
+
+	if (!init) {
+		start(dist_forward, dist_left, dist_right);
+	}
+
+	run(dist_forward, dist_left, dist_right);
 
     return false;
 }
