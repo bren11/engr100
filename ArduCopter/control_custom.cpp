@@ -21,6 +21,9 @@ int prevR = 0;
 int prevF = 0;
 bool init = false;
 
+int mode = 0;
+int error = 5;
+
 void end() {
 	ofstream myfile;
 	time_t current_time;
@@ -265,6 +268,89 @@ void run(int dist_forward, int dist_left, int dist_right) {
 	prevL = dist_left;
 	prevF = dist_forward;
 	prevR = dist_right;
+}
+
+void Move_left() {
+	target_roll = -1*moving_angle;
+	target_pitch = 0;
+}
+
+void Move_right() {
+	target_roll = moving_angle;
+	target_pitch = 0;
+}
+
+void Move_forward() {
+	target_pitch = moving_angle;
+	target_roll = 0;
+	move_forward = true;
+}
+
+void Move_back() {
+	target_pitch = -1*moving_angle;
+	target_roll = 0;
+}
+
+//No_move_forward is true
+void Keep_distance_front() {
+	g.custom_pid_pitch.set_input_filter_all(dist_forward - g.custom_param1);
+	target_pitch = g.custom_pid_pitch.get_pid(); 
+}
+//No_move_right is true;
+void Keep_distance_right() {
+	g.custom_pid_roll.set_input_filter_all(dist_right - g.custom_param2);
+	target_roll = g.custom_pid_roll.get_pid(); 
+}
+void Keep_distance_left() {
+	g.custom_pid_roll.set_input_filter_all(dist_left - g.custom_param2);
+	target_roll = -1 * g.custom_pid_roll.get_pid(); 
+}
+
+void switch_mode() {
+	
+
+	//keep distance from the wall
+	if(dist_forward - g.custom_param1 < -1 * error) {
+		move_forward = false;
+		is_movable_front = false;
+        move_right = false;
+        move_left = false;
+	}
+
+	//move forward if there is space to move and
+	else if(dist_forward - g.custom_param1 > error) {
+		is_movable_front = true;
+        move_left = false;
+        move_right = false;
+		if(current_dif_time >= time_delay) {
+			mode = 0;
+			move_forward = true;
+		}
+	}
+	bool result_1 = reach_steady_state_pitch();
+	bool result_2 = reach_steady_state_roll_right();
+
+	if(result_1) {
+
+		//mode 2
+		//go right if not reach yet
+        if (dist.right + dist.left < g.custom_param2){
+            mode = 3;
+            move_right = false;
+            move_left = false;
+        }
+		else if(dist.right > moving_bound) {
+			mode = 1;
+			move_right = true;
+			move_left = false;
+		}
+		//after keep distance to right wall move to left
+		else if(dist.left > moving_bound){
+			mode = 2;
+			move_right = false;
+			move_left = true;
+		} 
+	}
 }
 
 // custom_controller - computes target climb rate, roll, pitch, and yaw rate for custom flight mode
