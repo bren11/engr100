@@ -8,7 +8,9 @@
 using namespace std;
 
 /*
- * Init and run calls for custom flight mode (largely based off of the AltHold flight mode)
+ * custom_param1 is distance around the drone to walls
+ * custom_param2 is the time of overshoot
+ * custom_param3 is the angle of attack
  */
 const int xSize = 300;
 const int ySize = 400;
@@ -21,8 +23,15 @@ int prevR = 0;
 int prevF = 0;
 bool init = false;
 
-int mode = 0;
+int mode = 0; // initialize going forward
 int error = 5;
+
+float moving_angle = 0;
+bool hold_front = false;
+bool hold_left = false;
+bool hold_right = false;
+
+time_t startTime = time(NULL);
 
 void end() {
 	ofstream myfile;
@@ -58,6 +67,8 @@ bool Copter::custom_init(bool ignore_checks)
     // reset integrators for roll and pitch controllers
     g.pid_roll.reset_I();
     g.pid_pitch.reset_I();
+
+	moving_angle = g.custom_param3;
 
     return true;
 }
@@ -270,87 +281,29 @@ void run(int dist_forward, int dist_left, int dist_right) {
 	prevR = dist_right;
 }
 
-void Move_left() {
+void Move_left(float &target_roll, float &target_pitch) {
 	target_roll = -1*moving_angle;
 	target_pitch = 0;
 }
 
-void Move_right() {
+void Move_right(float &target_roll, float &target_pitch) {
 	target_roll = moving_angle;
 	target_pitch = 0;
 }
 
-void Move_forward() {
+void Move_forward(float &target_roll, float &target_pitch) {
 	target_pitch = moving_angle;
 	target_roll = 0;
-	move_forward = true;
 }
 
-void Move_back() {
+void Move_back(float &target_roll, float &target_pitch) {
 	target_pitch = -1*moving_angle;
 	target_roll = 0;
 }
 
-//No_move_forward is true
-void Keep_distance_front() {
-	g.custom_pid_pitch.set_input_filter_all(dist_forward - g.custom_param1);
-	target_pitch = g.custom_pid_pitch.get_pid(); 
-}
-//No_move_right is true;
-void Keep_distance_right() {
-	g.custom_pid_roll.set_input_filter_all(dist_right - g.custom_param2);
-	target_roll = g.custom_pid_roll.get_pid(); 
-}
-void Keep_distance_left() {
-	g.custom_pid_roll.set_input_filter_all(dist_left - g.custom_param2);
-	target_roll = -1 * g.custom_pid_roll.get_pid(); 
-}
-
-void switch_mode() {
-	
-
-	//keep distance from the wall
-	if(dist_forward - g.custom_param1 < -1 * error) {
-		move_forward = false;
-		is_movable_front = false;
-        move_right = false;
-        move_left = false;
-	}
-
-	//move forward if there is space to move and
-	else if(dist_forward - g.custom_param1 > error) {
-		is_movable_front = true;
-        move_left = false;
-        move_right = false;
-		if(current_dif_time >= time_delay) {
-			mode = 0;
-			move_forward = true;
-		}
-	}
-	bool result_1 = reach_steady_state_pitch();
-	bool result_2 = reach_steady_state_roll_right();
-
-	if(result_1) {
-
-		//mode 2
-		//go right if not reach yet
-        if (dist.right + dist.left < g.custom_param2){
-            mode = 3;
-            move_right = false;
-            move_left = false;
-        }
-		else if(dist.right > moving_bound) {
-			mode = 1;
-			move_right = true;
-			move_left = false;
-		}
-		//after keep distance to right wall move to left
-		else if(dist.left > moving_bound){
-			mode = 2;
-			move_right = false;
-			move_left = true;
-		} 
-	}
+void Stop(float &target_roll, float &target_pitch) {
+	target_pitch = 0;
+	target_roll = 0;
 }
 
 // custom_controller - computes target climb rate, roll, pitch, and yaw rate for custom flight mode
@@ -376,6 +329,83 @@ bool Copter::custom_controller(float &target_climb_rate, float &target_roll, flo
 
     // set desired yaw rate in centi-degrees per second (set to zero to hold constant heading)
     target_yaw_rate = 0.0f;
+
+	switch (mode) {
+		//move forward towards wall
+		time_t endTime;
+		case 0:
+			hold_front = false;
+			Move_forward(target_roll, target_pitch);
+			if (dist_forward - g.custom_param1 < -1 * error) {
+				mode = 1;
+			}
+			break;
+		//hit wall and start moving right
+		case 1:
+			hold_front = true;
+			hold_left = false;
+			hold_right = false;
+			Move_right(target_roll, target_pitch);
+			//hit open space in front
+			if (dist_forward - g.custom_param1 > 3 * error) {
+				startTime = time(NULL);
+				mode = 2;
+				hold_front = false;
+			//hit other wall to go other way
+			} else if (dist_right - g.custom_param1 < -1 * error) {
+				mode = 3;
+			}
+			break;
+		//wait to pass edge of wall then go back to straight
+		case 2:
+			Move_right(target_roll, target_pitch);
+			endTime = time(NULL);
+			if (endTime - startTime > g.custom_param2) {
+				mode = 0;
+				hold_right = true;
+			}
+			break;
+		//hit wall and move left
+		case 3:
+			hold_front = true;
+			hold_left = false;
+			hold_right = false;
+			Move_left(target_roll, target_pitch);
+			if (dist_forward - g.custom_param1 > 3 * error) {
+				startTime = time(NULL);
+				mode = 4;
+				hold_front = false;
+			} else if (dist_right - g.custom_param1 < -1 * error) {
+				mode = 5;
+			}
+			break;
+		//move left a bit more to avoid edge of wall
+		case 4:
+			Move_left(target_roll, target_pitch);
+			endTime = time(NULL);
+			if (endTime - startTime > g.custom_param2) {
+				mode = 0;
+				hold_left = true;
+			}
+			break;
+		//cant move, so land.
+		case 5:
+			Stop(target_roll, target_pitch);
+			return true;
+	}
+
+	/*if (hold_front) {
+		g.custom_pid_pitch.set_input_filter_all(dist_forward - g.custom_param1);
+		target_pitch = g.custom_pid_pitch.get_pid(); 
+	}
+	if (hold_left) {
+		g.custom_pid_roll.set_input_filter_all(g.custom_param1 - dist_left);
+		target_roll = g.custom_pid_roll.get_pid(); 
+	}
+	if (hold_right) {
+		g.custom_pid_roll.set_input_filter_all(dist_right - g.custom_param1);
+		target_roll = g.custom_pid_roll.get_pid(); 
+	}*/
 
 	if (!init) {
 		start(dist_forward, dist_left, dist_right);
